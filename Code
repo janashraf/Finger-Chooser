@@ -1,0 +1,216 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+public class FingerChooser : MonoBehaviour
+{
+    public GameObject circlePrefab; // Reference to the circle prefab
+    private List<GameObject> spawnedCircles = new List<GameObject>(); // List to store spawned circles
+    private bool isChoosingRandomFinger = false; // Flag to check if choosing a random finger is in progress
+    private float randomFingerChooseDelay = 3f; // Delay before choosing a random finger (in seconds)
+    private float timeSinceFingersPut = 0f; // Time since two or more fingers were put
+    private float delayAfterWin = 2f; // Delay after the random circle wins (in seconds)
+    private float delayTimer = 0f; // Timer for the delay
+    private float pulsateDuration = 1f; // Duration of each pulsate cycle (in seconds)
+    private float pulsateTimer = 0f; // Timer for the pulsate effect
+    private float pulsateScaleFactor = 0.5f; // Scale factor for the pulsate effect
+    private bool hasStartedPulsating = false; // Flag to check if pulsating has started
+    private bool hasVibrated = false; // Flag to check if vibration has been triggered
+
+    private void Update()
+    {
+        // List to store the indices of released fingers
+        List<int> releasedFingerIndices = new List<int>();
+
+        // Check if there is a delay in effect
+        if (delayTimer > 0)
+        {
+            delayTimer -= Time.deltaTime;
+
+            // Reset the vibration flag when the delay timer is completed
+            if (delayTimer <= 0)
+            {
+                hasVibrated = false;
+            }
+
+            // Do not process further until the delay is over
+            return;
+        }
+
+        // Iterate through all touches
+        for (int i = 0; i < Input.touchCount; i++)
+        {
+            Touch touch = Input.GetTouch(i);
+
+            // Check if the touch is on the screen
+            if (touch.phase == TouchPhase.Began)
+            {
+                // Spawn a new circle and add it to the list
+                GameObject newCircle = SpawnCircle(touch.position);
+                spawnedCircles.Add(newCircle);
+            }
+
+            // Update the position and scale of the spawned circles
+            UpdateCircleProperties();
+
+            // Check if the touch is ended or canceled
+            if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled)
+            {
+                // Mark the index of the released finger
+                releasedFingerIndices.Add(i);
+            }
+        }
+
+        // Destroy circles associated with released fingers
+        DestroyReleasedCircles(releasedFingerIndices);
+
+        // Check if two or more fingers were put
+        if (Input.touchCount >= 2)
+        {
+            // Update the time since fingers were put
+            timeSinceFingersPut += Time.deltaTime;
+
+            // If enough time has passed, choose a random finger
+            if (timeSinceFingersPut >= randomFingerChooseDelay && !isChoosingRandomFinger)
+            {
+                if (ChooseRandomFingerAndChangeColor())
+                {
+                    // Trigger vibration only once when a circle is successfully chosen
+                    if (!hasVibrated)
+                    {
+                        Handheld.Vibrate();
+                        hasVibrated = true;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Reset the time since fingers were put if fewer than two fingers are currently down
+            timeSinceFingersPut = 0f;
+            isChoosingRandomFinger = false;
+        }
+
+        // Update the pulsate effect timer
+        pulsateTimer += Time.deltaTime;
+
+        // Perform the pulsate effect
+        PulsateCircles();
+    }
+
+    private GameObject SpawnCircle(Vector2 position)
+    {
+        // Spawn a new circle at the touch position with an initial normal scale
+        GameObject newCircle = Instantiate(circlePrefab, position, Quaternion.identity);
+
+        // Assign a random color (excluding black)
+        Color randomColor = GetRandomColor();
+        Renderer circleRenderer = newCircle.GetComponent<Renderer>();
+        circleRenderer.material.color = randomColor;
+
+        // Change the color of child objects to the same random color
+        ChangeChildColors(newCircle.transform, randomColor);
+
+        return newCircle;
+    }
+
+    private void ChangeChildColors(Transform parent, Color color)
+    {
+        // Iterate through child objects and set their colors
+        foreach (Transform child in parent)
+        {
+            Renderer childRenderer = child.GetComponent<Renderer>();
+            if (childRenderer != null)
+            {
+                childRenderer.material.color = color;
+            }
+            // Recursive call for nested children
+            ChangeChildColors(child, color);
+        }
+    }
+
+    private Color GetRandomColor()
+    {
+        // Generate a random color excluding black
+        Color randomColor = new Color(Random.value, Random.value, Random.value);
+        return randomColor;
+    }
+
+    private void UpdateCircleProperties()
+    {
+        // Update the position and scale of all spawned circles
+        for (int i = 0; i < spawnedCircles.Count; i++)
+        {
+            if (i < Input.touchCount)
+            {
+                Touch touch = Input.GetTouch(i);
+                Vector3 touchPosWorld = Camera.main.ScreenToWorldPoint(touch.position);
+                spawnedCircles[i].transform.position = new Vector3(touchPosWorld.x, touchPosWorld.y, 0f);
+
+                // Pulsate effect: Increase and decrease the scale of circles smoothly
+                float scaleFactor = 1f + pulsateScaleFactor * Mathf.PingPong(Time.time / pulsateDuration, 1f);
+
+                spawnedCircles[i].transform.localScale = new Vector3(scaleFactor, scaleFactor, 1f);
+            }
+        }
+    }
+
+    private void DestroyReleasedCircles(List<int> releasedFingerIndices)
+    {
+        // Reverse the order of released indices to avoid issues with removal
+        releasedFingerIndices.Reverse();
+
+        foreach (int releasedIndex in releasedFingerIndices)
+        {
+            if (releasedIndex >= 0 && releasedIndex < spawnedCircles.Count)
+            {
+                GameObject releasedCircle = spawnedCircles[releasedIndex];
+                spawnedCircles.RemoveAt(releasedIndex);
+                Destroy(releasedCircle);
+            }
+        }
+    }
+
+    private bool ChooseRandomFingerAndChangeColor()
+    {
+        if (spawnedCircles.Count > 0)
+        {
+            // Choose a random index
+            int randomIndex = Random.Range(0, spawnedCircles.Count);
+
+            // Destroy all circles except the chosen one
+            DestroyAllCirclesExceptChosen(randomIndex);
+
+            // Start the delay timer
+            delayTimer = delayAfterWin;
+
+            isChoosingRandomFinger = true;
+
+            return true; // Return true when a circle is successfully chosen
+        }
+
+        return false; // Return false when no circle is chosen
+    }
+
+    private void DestroyAllCirclesExceptChosen(int chosenIndex)
+    {
+        for (int i = spawnedCircles.Count - 1; i >= 0; i--)
+        {
+            if (i != chosenIndex)
+            {
+                GameObject circleToDestroy = spawnedCircles[i];
+                spawnedCircles.RemoveAt(i);
+                Destroy(circleToDestroy);
+            }
+        }
+    }
+
+    private void PulsateCircles()
+    {
+        // Reset the pulsate effect timer if a full cycle is completed
+        if (pulsateTimer >= pulsateDuration)
+        {
+            pulsateTimer = 0f;
+            hasStartedPulsating = false; // Reset the flag after completing a cycle
+        }
+    }
+}
